@@ -202,10 +202,10 @@ def check_rsi(state, candles):
     price = closes[-1]
 
     if prev_rsi >= RSI_LOWER > now_rsi and state.get("rsi_low_bar") != bar_time:
-        messages.append(f"🟢 **黃金 30 分 RSI 跌破 {RSI_LOWER}（超賣）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
+        messages.append(f"🟢 **黃金 30 分鐘線 RSI 跌破 {RSI_LOWER}（超賣）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
         state["rsi_low_bar"] = bar_time
     if prev_rsi <= RSI_UPPER < now_rsi and state.get("rsi_high_bar") != bar_time:
-        messages.append(f"🔴 **黃金 30 分 RSI 漲破 {RSI_UPPER}（超買）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
+        messages.append(f"🔴 **黃金 30 分鐘線 RSI 漲破 {RSI_UPPER}（超買）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
         state["rsi_high_bar"] = bar_time
 
     state["last_rsi"] = round(now_rsi, 2)
@@ -236,7 +236,7 @@ def main():
         bid, ask, _ = fetch_bid_ask()
         candles = fetch_rsi_candles()
         rsi = calc_rsi([c for _, c in candles], RSI_LEN)[-1]
-        send_discord([f"✅ 黃金警示測試成功！目前 Sell {fmt(bid)}／Buy {fmt(ask)}／30 分 RSI {rsi:.1f}"], now_utc)
+        send_discord([f"✅ 黃金警示測試成功！目前 Sell {fmt(bid)}／Buy {fmt(ask)}／30 分鐘線 RSI {rsi:.1f}"], now_utc)
         print("測試訊息已送出")
         return
 
