@@ -1,0 +1,49 @@
+# 黃金警示：GitHub 雲端每 5 分鐘執行一次
+name: gold-alert
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"      # 每 5 分鐘（GitHub 忙的時候可能會延後幾分鐘）
+  workflow_dispatch:           # 允許在 GitHub 網頁上手動按「Run workflow」
+    inputs:
+      test:
+        description: "只送一則測試訊息到 Discord"
+        type: boolean
+        default: false
+
+# 同一時間只跑一個，避免兩次執行同時改到 state.json
+concurrency:
+  group: gold-alert
+  cancel-in-progress: false
+
+permissions:
+  contents: write              # 需要把 state.json 存回專案
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 檢查黃金價格與 RSI
+        env:
+          TWELVE_API_KEY: ${{ secrets.TWELVE_API_KEY }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TEST_MODE: ${{ inputs.test == true && 'true' || 'false' }}
+        run: python gold_alert.py
+
+      # 紀錄有變才存回去（今天最高／最低、上次提醒時間）
+      - name: 儲存紀錄
+        run: |
+          if [ -n "$(git status --porcelain state.json)" ]; then
+            git config user.name "gold-alert-bot"
+            git config user.email "gold-alert-bot@users.noreply.github.com"
+            git add state.json
+            git commit -m "更新黃金警示紀錄"
+            git push
+          fi
