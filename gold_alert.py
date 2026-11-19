@@ -176,13 +176,13 @@ def check_high_low(now_utc, state, bid, ask, quote_time):
 
     if bid > state["bid_high"]:
         if minutes_since(state.get("last_high_alert"), now_utc) >= HIGH_LOW_COOLDOWN_MIN:
-            messages.append(f"🔺 **黃金賣價（Bid）創今日新高：{fmt(bid)}**（前高 {fmt(state['bid_high'])}）")
+            messages.append(f"🔺 **黃金 Sell 價創今日新高：{fmt(bid)}**（前高 {fmt(state['bid_high'])}）")
             state["last_high_alert"] = now_utc.isoformat()
         state["bid_high"] = bid
 
     if ask < state["ask_low"]:
         if minutes_since(state.get("last_low_alert"), now_utc) >= HIGH_LOW_COOLDOWN_MIN:
-            messages.append(f"🔻 **黃金買價（Ask）創今日新低：{fmt(ask)}**（前低 {fmt(state['ask_low'])}）")
+            messages.append(f"🔻 **黃金 Buy 價創今日新低：{fmt(ask)}**（前低 {fmt(state['ask_low'])}）")
             state["last_low_alert"] = now_utc.isoformat()
         state["ask_low"] = ask
 
@@ -236,7 +236,7 @@ def main():
         bid, ask, _ = fetch_bid_ask()
         candles = fetch_rsi_candles()
         rsi = calc_rsi([c for _, c in candles], RSI_LEN)[-1]
-        send_discord([f"✅ 黃金警示測試成功！目前 Bid {fmt(bid)}／Ask {fmt(ask)}／30 分 RSI {rsi:.1f}"], now_utc)
+        send_discord([f"✅ 黃金警示測試成功！目前 Sell {fmt(bid)}／Buy {fmt(ask)}／30 分 RSI {rsi:.1f}"], now_utc)
         print("測試訊息已送出")
         return
 
