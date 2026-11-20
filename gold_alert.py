@@ -184,7 +184,8 @@ def fmt(x):
 def minute_start(now_utc, state):
     """這次要抓 1 分鐘 K 線的起點：新的一天從開盤抓；否則從上次檢查前 2 分鐘抓（重疊一點比較保險）"""
     day_start = trading_day_start(now_utc)
-    if state.get("day") != day_start.isoformat() or not state.get("last_check"):
+    if (state.get("day") != day_start.isoformat() or not state.get("last_check")
+            or state.get("bid_high") is None):
         return day_start
     return max(day_start, datetime.fromisoformat(state["last_check"]) - timedelta(minutes=2))
 
@@ -203,21 +204,47 @@ def range_bid_ask(bid, ask, minute_candles):
     return round(hi, 3), round(lo, 3)
 
 
+def daily_summary(state):
+    """
+    昨日摘要：每天早上換日時送一則
+    有收到 = 系統正常運作；哪天早上沒收到，代表系統可能停了
+    （週末休市那天沒有交易，就不送）
+    """
+    if not state.get("day") or state.get("bid_high") is None or not state.get("traded", True):
+        return None
+    label = datetime.fromisoformat(state["day"]).astimezone(TAIPEI).strftime("%m/%d")
+    lines = [f"📊 **黃金 {label} 摘要**",
+             f"Sell 最高 {fmt(state['bid_high'])}｜Buy 最低 {fmt(state['ask_low'])}"]
+    if state.get("last_bid") is not None:
+        lines.append(f"收盤 Sell {fmt(state['last_bid'])}／Buy {fmt(state['last_ask'])}"
+                     + (f"｜30 分鐘線 RSI {state['last_rsi']:.1f}" if state.get("last_rsi") is not None else ""))
+    lines.append("✅ 黃金警示運作正常")
+    return "\n".join(lines)
+
+
 def check_high_low(now_utc, state, bid, ask, quote_time, minute_candles=None):
     """Sell（Bid）新高、Buy（Ask）新低"""
     messages = []
-
-    # 報價超過 15 分鐘沒更新 = 休市中（週末、每日休市時段），不判斷
-    if (now_utc - quote_time).total_seconds() > 15 * 60:
-        return messages
-
-    hi, lo = range_bid_ask(bid, ask, minute_candles or [])
-    state["last_check"] = now_utc.isoformat()
+    # 報價超過 15 分鐘沒更新 = 休市中（週末、每日休市時段）
+    stale = (now_utc - quote_time).total_seconds() > 15 * 60
 
     day_key = trading_day_start(now_utc).isoformat()
     if state.get("day") != day_key:
-        # 新的一天（或第一次執行）：用開盤到現在的高低點當起點，不發提醒，避免一開盤就叫
-        state.update(day=day_key, bid_high=hi, ask_low=lo)
+        # ---------- 換日：先送昨日摘要（也是「系統還活著」的確認），再開始新的一天 ----------
+        summary = daily_summary(state)
+        if summary:
+            messages.append(summary)
+        state.update(day=day_key, bid_high=None, ask_low=None, traded=False)
+
+    if stale:
+        return messages
+
+    hi, lo = range_bid_ask(bid, ask, minute_candles or [])
+    state.update(last_check=now_utc.isoformat(), last_bid=bid, last_ask=ask, traded=True)
+
+    if state.get("bid_high") is None or state.get("ask_low") is None:
+        # 今天第一次有報價：用開盤到現在的高低點當起點，不發提醒，避免一開盤就叫
+        state.update(bid_high=hi, ask_low=lo)
         return messages
 
     if hi > state["bid_high"]:
