@@ -15,8 +15,11 @@
 上一次的紀錄（今天最高／最低、上次什麼時候叫過）存在 state.json。
 只用 Python 內建套件，不用另外安裝任何東西。
 
-⚠️ 新高／新低是「每次檢查時的價格」互相比較，
-   兩次檢查之間一閃而過的尖刺可能會漏掉。
+新高／新低的補強（2026-11-20）：
+   除了檢查當下的 Bid／Ask，也會抓「上次檢查到現在」的 1 分鐘 K 線，
+   把中間的最高、最低一起算進去，兩次檢查之間的尖刺不會漏掉。
+   1 分鐘 K 線是中間價，會用「當下 Swissquote 中間價 − K 線最新收盤」校正，
+   再加減半個點差，換算成 Sell（Bid）最高、Buy（Ask）最低的估計值。
 =====================================================================
 """
 
@@ -42,6 +45,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 SQ_URL = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD"
 TD_URL = ("https://api.twelvedata.com/time_series?symbol=XAU/USD"
           f"&interval={RSI_INTERVAL}&outputsize=200&timezone=UTC&apikey=")
+TD_BASE = "https://api.twelvedata.com/time_series?symbol=XAU/USD&timezone=UTC"
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -96,6 +100,23 @@ def fetch_rsi_candles():
         raise RuntimeError(f"Twelve Data 錯誤：{data.get('message')}")
     values = list(reversed(data["values"]))   # 原本是新到舊，翻成舊到新
     return [(v["datetime"], float(v["close"])) for v in values]
+
+
+def fetch_minute_candles(start_utc):
+    """
+    跟 Twelve Data 抓從 start_utc 到現在的 1 分鐘 K 線（中間價）
+    回傳由舊到新的 [{"high":…, "low":…, "close":…}, ...]；沒有資料回傳空清單
+    """
+    start = start_utc.strftime("%Y-%m-%d%%20%H:%M:%S")
+    url = f"{TD_BASE}&interval=1min&outputsize=1500&start_date={start}&apikey={TWELVE_API_KEY}"
+    data = http_json(url)
+    if data.get("status") != "ok":
+        # 時間範圍內沒有資料（例如休市）不算錯誤
+        if "No data" in str(data.get("message", "")):
+            return []
+        raise RuntimeError(f"Twelve Data 錯誤：{data.get('message')}")
+    values = list(reversed(data["values"]))
+    return [{"high": float(v["high"]), "low": float(v["low"]), "close": float(v["close"])} for v in values]
 
 
 def calc_rsi(closes, length):
@@ -160,31 +181,56 @@ def fmt(x):
 # =====================================================================
 # 判斷邏輯（不碰網路，方便測試）
 # =====================================================================
-def check_high_low(now_utc, state, bid, ask, quote_time):
-    """Bid 新高、Ask 新低"""
+def minute_start(now_utc, state):
+    """這次要抓 1 分鐘 K 線的起點：新的一天從開盤抓；否則從上次檢查前 2 分鐘抓（重疊一點比較保險）"""
+    day_start = trading_day_start(now_utc)
+    if state.get("day") != day_start.isoformat() or not state.get("last_check"):
+        return day_start
+    return max(day_start, datetime.fromisoformat(state["last_check"]) - timedelta(minutes=2))
+
+
+def range_bid_ask(bid, ask, minute_candles):
+    """
+    把 1 分鐘 K 線（中間價）換算成這段期間的 Sell 最高、Buy 最低
+    回傳 (Sell 最高, Buy 最低)，並且一定把當下的 Bid／Ask 也算進去
+    """
+    hi, lo = bid, ask
+    if minute_candles:
+        half_spread = (ask - bid) / 2
+        offset = (bid + ask) / 2 - minute_candles[-1]["close"]   # 兩家報價的差距，自動校正
+        hi = max(hi, max(c["high"] for c in minute_candles) + offset - half_spread)
+        lo = min(lo, min(c["low"] for c in minute_candles) + offset + half_spread)
+    return round(hi, 3), round(lo, 3)
+
+
+def check_high_low(now_utc, state, bid, ask, quote_time, minute_candles=None):
+    """Sell（Bid）新高、Buy（Ask）新低"""
     messages = []
 
     # 報價超過 15 分鐘沒更新 = 休市中（週末、每日休市時段），不判斷
     if (now_utc - quote_time).total_seconds() > 15 * 60:
         return messages
 
+    hi, lo = range_bid_ask(bid, ask, minute_candles or [])
+    state["last_check"] = now_utc.isoformat()
+
     day_key = trading_day_start(now_utc).isoformat()
     if state.get("day") != day_key:
-        # 新的一天（或第一次執行）：只記錄起點，不發提醒，避免一開盤就叫
-        state.update(day=day_key, bid_high=bid, ask_low=ask)
+        # 新的一天（或第一次執行）：用開盤到現在的高低點當起點，不發提醒，避免一開盤就叫
+        state.update(day=day_key, bid_high=hi, ask_low=lo)
         return messages
 
-    if bid > state["bid_high"]:
+    if hi > state["bid_high"]:
         if minutes_since(state.get("last_high_alert"), now_utc) >= HIGH_LOW_COOLDOWN_MIN:
-            messages.append(f"🔺 **黃金 Sell 價創今日新高：{fmt(bid)}**（前高 {fmt(state['bid_high'])}）")
+            messages.append(f"🔺 **黃金 Sell 價創今日新高：{fmt(hi)}**（前高 {fmt(state['bid_high'])}，現價 {fmt(bid)}）")
             state["last_high_alert"] = now_utc.isoformat()
-        state["bid_high"] = bid
+        state["bid_high"] = hi
 
-    if ask < state["ask_low"]:
+    if lo < state["ask_low"]:
         if minutes_since(state.get("last_low_alert"), now_utc) >= HIGH_LOW_COOLDOWN_MIN:
-            messages.append(f"🔻 **黃金 Buy 價創今日新低：{fmt(ask)}**（前低 {fmt(state['ask_low'])}）")
+            messages.append(f"🔻 **黃金 Buy 價創今日新低：{fmt(lo)}**（前低 {fmt(state['ask_low'])}，現價 {fmt(ask)}）")
             state["last_low_alert"] = now_utc.isoformat()
-        state["ask_low"] = ask
+        state["ask_low"] = lo
 
     return messages
 
@@ -253,8 +299,15 @@ def main():
     # 兩個資料來源分開處理：一個壞掉，另一個照常運作
     try:
         bid, ask, qt = fetch_bid_ask()
-        messages += check_high_low(now_utc, state, bid, ask, qt)
         state.pop("err_Swissquote", None)
+        # 1 分鐘 K 線抓不到也沒關係，退回只用當下報價判斷
+        try:
+            minute_candles = fetch_minute_candles(minute_start(now_utc, state))
+            state.pop("err_TwelveData1m", None)
+        except Exception as e:
+            minute_candles = []
+            messages += error_notice(state, "TwelveData1m", e, now_utc)
+        messages += check_high_low(now_utc, state, bid, ask, qt, minute_candles)
     except Exception as e:
         messages += error_notice(state, "Swissquote", e, now_utc)
 
