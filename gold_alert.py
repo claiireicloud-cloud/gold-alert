@@ -198,16 +198,23 @@ def check_rsi(state, candles):
         return messages
 
     bar_time = candles[-1][0]              # 目前這根 30 分鐘 K 線的時間
-    now_rsi, prev_rsi = rsi[-1], rsi[-2]   # prev = 上一根已收盤 K 線的 RSI
+    now_rsi = rsi[-1]
     price = closes[-1]
 
-    if prev_rsi >= RSI_LOWER > now_rsi and state.get("rsi_low_bar") != bar_time:
+    # 用「區間」判斷：low = 低於 30、high = 高於 70、mid = 中間
+    # 跟「上一次檢查時的區間」比，從別的區間進到 low／high 就提醒
+    # → 就算中間有幾次檢查漏跑，下一次檢查也會補發，不會錯過
+    zone = "low" if now_rsi < RSI_LOWER else "high" if now_rsi > RSI_UPPER else "mid"
+    prev_zone = state.get("rsi_zone", "mid")
+
+    if zone == "low" and prev_zone != "low" and state.get("rsi_low_bar") != bar_time:
         messages.append(f"🟢 **黃金 30 分鐘線 RSI 跌破 {RSI_LOWER}（超賣）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
         state["rsi_low_bar"] = bar_time
-    if prev_rsi <= RSI_UPPER < now_rsi and state.get("rsi_high_bar") != bar_time:
+    if zone == "high" and prev_zone != "high" and state.get("rsi_high_bar") != bar_time:
         messages.append(f"🔴 **黃金 30 分鐘線 RSI 漲破 {RSI_UPPER}（超買）**：RSI {now_rsi:.1f}，價格 {fmt(price)}")
         state["rsi_high_bar"] = bar_time
 
+    state["rsi_zone"] = zone
     state["last_rsi"] = round(now_rsi, 2)
     return messages
 
