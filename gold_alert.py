@@ -32,7 +32,7 @@ RSI_LEN = 14                # RSI 期數
 RSI_INTERVAL = "30min"      # RSI 用的 K 線週期
 RSI_UPPER = 70              # 超買線
 RSI_LOWER = 30              # 超賣線
-HIGH_LOW_COOLDOWN_MIN = 60  # 新高／新低：同一種提醒幾分鐘內只叫一次
+HIGH_LOW_COOLDOWN_MIN = 0   # 新高／新低：同一種提醒幾分鐘內只叫一次（0 = 不冷卻，每次創新高／新低都叫）
 SQ_PROFILE = "prime"        # Swissquote 報價等級（premium／prime／elite，價差略有不同）
 
 # ---------- 金鑰：從環境變數讀（GitHub 加密欄位），不寫死在程式裡 ----------
